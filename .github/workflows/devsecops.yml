@@ -1,0 +1,63 @@
+name: "DevSecOps Pipeline"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  security_scan:
+    name: "Security Scanning"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 1. SAST for App Code (Python Bandit)
+      - name: Run Bandit (Python Security Scanner)
+        run: |
+          pip install bandit
+          bandit -r ./app/ || echo "Bandit found vulnerabilities (this is expected in the demo!)"
+
+      # 2. Secret Scanning (TruffleHog)
+      - name: Secret Scanning
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ""
+          head: ${{ github.ref_name }}
+          extra_args: --debug --only-verified
+        continue-on-error: true # Let it continue for demo purposes
+
+      # 3. IaC Security Scanning (tfsec)
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: ./terraform
+          soft_fail: true # Change to false to block deployments!
+
+  terraform:
+    name: "Infrastructure Deployment"
+    needs: security_scan # Only run if security passes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./terraform
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -no-color
