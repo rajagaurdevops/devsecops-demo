@@ -2,8 +2,8 @@ from flask import Flask
 
 app = Flask(__name__)
 
-# Let's use a random-looking key instead of the AWS official example key
-SECRET_API_KEY = "AKIA1234567890ABCDEF" 
+# Fake Slack Bot Token (Trufflehog catches this easily)
+SLACK_BOT_TOKEN = "xoxb-123456789012-1234567890123-abcdef1234567890abcdef12"
 
 @app.route('/')
 def hello():
