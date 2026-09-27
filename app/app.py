@@ -10,4 +10,5 @@ def hello():
     return "Hello, DevSecOps World!"
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    # FIXED: Turned off debug mode and bound to localhost (127.0.0.1) instead of 0.0.0.0
+    app.run(host='127.0.0.1', port=8080, debug=False)
