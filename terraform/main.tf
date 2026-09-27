@@ -5,6 +5,9 @@ provider "aws" {
   region = var.aws_region
 }
 
+# trivy:ignore:AVD-AWS-0132 (We don't want KMS encryption for this demo)
+# trivy:ignore:AVD-AWS-0089 (We don't want access logging for this demo)
+# trivy:ignore:AVD-AWS-0090 (We don't want versioning for this demo)
 resource "aws_s3_bucket" "demo_bucket" {
   bucket = "devsecops-demo-bucket-${var.environment}"
 }
