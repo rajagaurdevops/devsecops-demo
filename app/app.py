@@ -1,9 +1,9 @@
 from flask import Flask
+import os
 
 app = Flask(__name__)
 
-# Fake Slack Bot Token (Trufflehog catches this easily)
-SLACK_BOT_TOKEN = "xoxb-123456789012-1234567890123-abcdef1234567890abcdef12"
+SECRET_API_KEY = os.getenv("SECRET_API_KEY")
 
 @app.route('/')
 def hello():
