@@ -8,6 +8,19 @@ on:
     branches:
       - main
 
+# Least-privilege token by default. security-events:write is needed to upload
+# SARIF to the Security tab; id-token:write is needed for AWS OIDC auth below.
+permissions:
+  contents: read
+  security-events: write
+  # id-token: write
+
+# Cancel superseded runs on the same branch/PR instead of letting them race
+# against Terraform state.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   security_scan:
     name: "Security Scanning"
@@ -19,35 +32,65 @@ jobs:
           fetch-depth: 0
 
       # 1. SAST for App Code (Python Bandit)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Bandit
+        run: pip install bandit bandit-sarif-formatter
+
       - name: Run Bandit (Python Security Scanner)
-        run: |
-          pip install bandit
-          bandit -r ./app/ || echo "Bandit found vulnerabilities (this is expected in the demo!)"
+        run: bandit -r ./app/ -f sarif -o bandit-results.sarif
+        # No `|| echo` / continue-on-error here on purpose: a real finding
+        # should fail this job and block the terraform job below.
 
-      # 2. Secret Scanning (TruffleHog)
-      - name: Secret Scanning
-        uses: trufflesecurity/trufflehog@main
+      - name: Upload Bandit SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
         with:
-          path: ./
-          base: ""
-          head: ${{ github.ref_name }}
-        continue-on-error: false # Let it continue for demo purposes
+          sarif_file: bandit-results.sarif
+          category: bandit
 
-      # 3. IaC Security Scanning (tfsec)
-      - name: Run tfsec
-        uses: aquasecurity/tfsec-action@v1.0.0
+      # 2. Secret Scanning (Gitleaks) -- blocking, no continue-on-error.
+      # A leaked credential should always stop the pipeline.
+      - name: Gitleaks Secret Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_NOTIFY_USER_LIST: ""
+
+      # 3. IaC Security Scanning: tfsec was merged into Trivy in 2023 and is no
+      # longer actively developed, so this is now covered by Trivy's
+      # misconfiguration scanner in the step below instead of a separate action.
+
+      # 4. Vulnerability, Dependency & IaC Config Scanning (Trivy)
+      - name: Run Trivy Scanner
+        uses: aquasecurity/trivy-action@0.28.0 # pinned release tag, not @master
         with:
-          working_directory: ./terraform
-          soft_fail: true # Change to false to block deployments!
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'vuln,misconfig' # misconfig covers the ./terraform IaC checks
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: '1' # fail the job on CRITICAL/HIGH findings
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
 
   terraform:
     name: "Infrastructure Deployment"
-    needs: security_scan # Only run if security passes
+    needs: security_scan # now a real gate -- this job only runs if scans pass
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./terraform
-    
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -55,10 +98,30 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.5.0"
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        run: terraform validate
 
       - name: Terraform Plan
-        run: terraform plan -no-color
+        run: terraform plan -no-color -input=false -out=tfplan
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: terraform/tfplan
+          retention-days: 2
